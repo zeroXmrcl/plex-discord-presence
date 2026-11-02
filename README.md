@@ -1,10 +1,10 @@
 # Plex Discord Presence
 
-Show what you are watching on Plex as Discord Rich Presence:
+Show what you are watching on Plex as Discord Rich Presence.
 
-> **Watching Some Show**
-> S1 · E3 – Episode title
-> 12:34 elapsed
+![Plex Discord Presence showing a sample episode](docs/screenshot.png)
+
+*Your Discord profile while an episode plays (sample data from `node presence.js test`).*
 
 - **Zero dependencies.** One file, Node.js built-ins only. No `npm install`.
 - **LAN-only.** While running it only talks to your Plex server on your network
@@ -114,13 +114,6 @@ add icons:
   <https://app.plex.tv/desktop/#!/settings/devices/all> ("Plex Discord Presence").
 - Posters are not shown: Discord can only display images from public URLs,
   which would mean uploading what you watch to a third-party image host.
-
-## Upgrading from version 1
-
-Version 1 read `~/.plex-discord-presence/plex.env`. Version 2 still reads it
-if no `config.json`/`token.json` exist, but running `setup` once is
-recommended. If you started version 1 with your own autostart entry, remove
-that entry before running `install`, otherwise two copies will run.
 
 ## Uninstall
 
