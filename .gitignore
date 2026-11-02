@@ -1,0 +1,9 @@
+# Never commit sign-in tokens or local config
+token.json
+config.json
+plex.env
+*.env
+*.log
+*.log.old
+node_modules/
+.DS_Store

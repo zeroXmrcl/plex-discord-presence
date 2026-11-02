@@ -1,0 +1,16 @@
+{
+  "discordClientId": "1566630137603162182",
+  "largeImageKey": "logo",
+  "largeImageText": "Plex",
+  "smallImagePlayingKey": "",
+  "smallImagePausedKey": "",
+  "pollIntervalSeconds": 5,
+  "plexServerUrl": "https://192-168-1-10.0123456789abcdef0123456789abcdef.plex.direct:32400",
+  "plexConnectAddress": "",
+  "plexTlsServername": "",
+  "plexUser": ["1", "your-plex-username"],
+  "hideWhenPaused": false,
+  "showPausedState": true,
+  "mediaTypes": ["episode", "movie", "clip", "video"],
+  "plexClientIdentifier": ""
+}
