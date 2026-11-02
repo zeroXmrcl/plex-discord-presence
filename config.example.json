@@ -13,9 +13,11 @@
   "showPausedState": true,
   "mediaTypes": ["episode", "movie", "clip", "video"],
   "plexClientIdentifier": "",
+  "music": true,
   "templates": {
     "episode": { "details": "{show|title}", "state": "[S{season}][ · E{episode}][ – {episodeTitle}]", "largeText": "" },
     "movie": { "details": "{title}", "state": "{year|'Movie'}", "largeText": "" },
+    "track": { "details": "{title}", "state": "{artist}", "largeText": "{album}" },
     "other": { "details": "{title}", "state": "{show|library|'Video'}", "largeText": "" }
   },
   "pausedPrefix": "Paused – ",

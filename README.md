@@ -1,6 +1,6 @@
 # Plex Discord Presence
 
-Show what you are watching on Plex as Discord Rich Presence.
+Show what you are watching or listening to on Plex as Discord Rich Presence.
 
 ![Plex Discord Presence showing a sample episode](docs/screenshot.png)
 
@@ -11,6 +11,8 @@ Show what you are watching on Plex as Discord Rich Presence.
   and to the Discord desktop app on your computer. No tracking, no image hosts.
 - **"Watching" activity type**, so your member list status reads
   "Watching <show>" instead of "Playing Plex".
+- **Music too.** Plexamp or any Plex app: "Listening to <track>", with the
+  artist, the album as tooltip and a progress bar.
 - **Your own text.** Templates with placeholders, allow/block lists for
   libraries, titles, players and users, and pause options.
 - **Browser sign-in.** No hunting for your Plex token.
@@ -55,7 +57,7 @@ node presence.js status    # check that everything works
 | `install` | Copies the script to `~/.plex-discord-presence/app/` and starts it at login: a hidden Scheduled Task on Windows (restarts on failure), a LaunchAgent on macOS, a systemd user service on Linux. Run it again after updating to restart with the new version. |
 | `uninstall` | Removes the autostart. `--purge` also deletes config, sign-in token and logs. |
 | `status` | Shows config, sign-in state, autostart state and whether Plex and Discord are reachable. Never prints the token. |
-| `test [episode\|movie]` | Shows a sample activity on Discord for 20 seconds, using your templates. Also checks your config. |
+| `test [episode\|movie\|music]` | Shows a sample activity on Discord for 20 seconds, using your templates. Also checks your config. |
 
 ## Configuration
 
@@ -81,7 +83,8 @@ Everything lives in `~/.plex-discord-presence/`
 | `plexUser` | your account | Whose playback to show: `"all"`, a user ID, a username, or a list. On your own server, the owner is user ID `1`. |
 | `hideWhenPaused` | `false` | Clear the activity while paused instead of showing "Paused – …". |
 | `showPausedState` | `true` | Prefix the second line with "Paused – " while paused. |
-| `mediaTypes` | episode, movie, clip, video | Which Plex item types to show. |
+| `mediaTypes` | episode, movie, clip, video | Which Plex video item types to show. |
+| `music` | `true` | Show music (Plex item type `track`) as "Listening to". `false` turns it off. |
 | `templates` | see below | Text of the two lines and the large image tooltip, per media type. |
 | `pausedPrefix` | `Paused – ` | Text put in front of the second line while paused (if `showPausedState` is on). |
 | `hideAfterPausedMinutes` | `0` | Clear the activity after it has been paused this many minutes. `0` = never. Counted from when the script first saw the pause. |
@@ -97,8 +100,8 @@ an invalid config, and unknown options (typos) are reported as warnings.
 
 ### Templates
 
-`templates` has one entry per media type: `episode`, `movie` and `other`
-(clips, trailers and other videos). Each has three fields: `details` (first
+`templates` has one entry per media type: `episode`, `movie`, `track`
+(music) and `other` (clips, trailers and other videos). Each has three fields: `details` (first
 line), `state` (second line) and `largeText` (tooltip of the large image;
 empty uses `largeImageText`). Leave out what you do not want to change.
 
@@ -108,6 +111,7 @@ The defaults show the same text as version 2.0.0:
 "templates": {
   "episode": { "details": "{show|title}", "state": "[S{season}][ · E{episode}][ – {episodeTitle}]" },
   "movie":   { "details": "{title}", "state": "{year|'Movie'}" },
+  "track":   { "details": "{title}", "state": "{artist}", "largeText": "{album}" },
   "other":   { "details": "{title}", "state": "{show|library|'Video'}" }
 }
 ```
@@ -146,7 +150,7 @@ Placeholders:
 | `{user}` | Plex user who is playing |
 | `{state}` | `Playing`, `Paused` or `Buffering` |
 | `{duration}` | Total length, e.g. `45:00` or `1:52:10` |
-| `{type}` | `Episode`, `Movie` or `Video` |
+| `{type}` | `Episode`, `Movie`, `Track` or `Video` |
 
 Lines are cut to 128 characters, Discord's limit. Note that everything you
 put into a template is visible to everyone who can see your profile, for
@@ -190,6 +194,14 @@ Movies with year and rating, the library name as tooltip:
 }
 ```
 
+Music as "Artist – Song", with album and year on the second line:
+
+```json
+{
+  "templates": { "track": { "details": "{artist} – {title}", "state": "{album}[ ({year})]" } }
+}
+```
+
 Never show the kids' library, one show, or anything played on the bedroom TV:
 
 ```json
@@ -201,6 +213,17 @@ Never show the kids' library, one show, or anything played on the bedroom TV:
   }
 }
 ```
+
+## Music
+
+Music playback shows up as **Listening to** with the track title, the
+artist on the second line, the album as tooltip of the large image and a
+progress bar. It works with Plexamp and any other Plex app that plays your
+music library, because it uses the same session list as video. Your user
+filter (`plexUser`) and `filters` apply too, so for example
+`"players": { "block": ["Plexamp"] }` hides Plexamp only. Set `"music": false`
+to turn music off. If your Discord version does not accept the "Listening"
+type, the activity is sent as "Playing Plex" instead.
 
 ## The Discord application ID
 
@@ -256,7 +279,7 @@ settings.
 ## Development
 
 ```sh
-npm test    # unit tests + an end-to-end test with mock Plex/Discord (no network)
+npm test    # unit tests + end-to-end tests with mock Plex/Discord (no network)
 ```
 
 ## License

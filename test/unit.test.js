@@ -153,6 +153,9 @@ test('CLI args', () => {
   assert.deepEqual(p.parseArgs([]), { command: 'run', flags: {}, args: [] });
   assert.deepEqual(p.parseArgs(['setup', '--server', 'Home', '--relogin']), { command: 'setup', flags: { server: 'Home', relogin: true }, args: [] });
   assert.deepEqual(p.parseArgs(['uninstall', '--purge']), { command: 'uninstall', flags: { purge: true }, args: [] });
+  assert.equal(p.parseArgs(['--version']).command, '--version');
+  assert.equal(p.parseArgs(['--help']).command, '--help');
+  assert.deepEqual(p.parseArgs(['test', 'music']), { command: 'test', flags: {}, args: ['music'] });
 });
 
 test('service files quote paths with spaces', () => {

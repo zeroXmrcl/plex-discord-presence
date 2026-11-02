@@ -1,7 +1,7 @@
 {
   "name": "plex-discord-presence",
-  "version": "2.0.0",
-  "description": "Show what you watch on Plex as Discord Rich Presence. Zero dependencies, LAN-only.",
+  "version": "2.1.0",
+  "description": "Show what you watch and listen to on Plex as Discord Rich Presence. Zero dependencies, LAN-only.",
   "main": "presence.js",
   "bin": { "plex-discord-presence": "presence.js" },
   "scripts": {

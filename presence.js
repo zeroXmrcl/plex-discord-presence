@@ -2,7 +2,8 @@
 // Plex -> Discord Rich Presence.
 //
 // Polls your Plex Media Server on the local network and shows
-// "Watching <title>" on your Discord profile via Discord's local IPC socket.
+// "Watching <title>" or "Listening to <track>" on your Discord profile via
+// Discord's local IPC socket.
 //
 // - Zero dependencies: Node.js built-ins only, single file.
 // - LAN-only at runtime: the only outside requests are made by `setup`
@@ -22,7 +23,7 @@ const crypto = require('crypto');
 const readline = require('readline');
 const { execFileSync, spawnSync } = require('child_process');
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const PRODUCT = 'Plex Discord Presence';
 const SERVICE_NAME = 'plex-discord-presence';            // systemd unit name
 const LAUNCHD_LABEL = 'io.github.plex-discord-presence';  // macOS LaunchAgent label
@@ -51,11 +52,13 @@ const DEFAULT_CONFIG = deepFreeze({
   hideWhenPaused: false,
   showPausedState: true,      // prefix "Paused – " while paused
   mediaTypes: ['episode', 'movie', 'clip', 'video'],
-  plexClientIdentifier: '',   // generated on first setup, identifies this app to Plex
+  plexClientIdentifier: '',
+  music: true,                // show music ("Listening to"), from Plexamp or any Plex app   // generated on first setup, identifies this app to Plex
   // Display options (added in 2.1.0). Only written to config.json when changed.
   templates: {
     episode: { details: '{show|title}', state: '[S{season}][ · E{episode}][ – {episodeTitle}]', largeText: '' },
     movie: { details: '{title}', state: "{year|'Movie'}", largeText: '' },
+    track: { details: '{title}', state: '{artist}', largeText: '{album}' },
     other: { details: '{title}', state: "{show|library|'Video'}", largeText: '' },
   },
   pausedPrefix: 'Paused – ',
@@ -263,6 +266,7 @@ function normalizeConfig(raw) {
     cfg.timestamps = DEFAULT_CONFIG.timestamps;
   }
   checkBoolean(cfg, 'showPlayPauseIcon', errors);
+  checkBoolean(cfg, 'music', errors);
   if (STATUS_DISPLAY[cfg.statusDisplay] == null) {
     errors.push(`statusDisplay must be one of ${Object.keys(STATUS_DISPLAY).map((m) => `"${m}"`).join(', ')}`);
     cfg.statusDisplay = DEFAULT_CONFIG.statusDisplay;
@@ -440,7 +444,7 @@ const PLACEHOLDERS = Object.freeze({
   type: 'Media type: Episode, Movie, Track or Video',
 });
 
-const TEMPLATE_KINDS = ['episode', 'movie', 'other'];
+const TEMPLATE_KINDS = ['episode', 'movie', 'track', 'other'];
 const TEMPLATE_FIELDS = ['details', 'state', 'largeText'];
 const FILTER_KEYS = ['libraries', 'titles', 'players', 'users'];
 const TIMESTAMP_MODES = ['progress', 'elapsed', 'off'];
@@ -672,11 +676,18 @@ function matchesUser(session, filter) {
   return [u.id, u.title, u.username].some((v) => v != null && filter.includes(String(v).toLowerCase()));
 }
 
+// Video types come from mediaTypes; music ("track") is controlled by "music".
+function allowedTypes(cfg) {
+  const types = (cfg.mediaTypes || DEFAULT_CONFIG.mediaTypes).filter((t) => t !== 'track');
+  if (cfg.music !== false) types.push('track');
+  return types;
+}
+
 // Picks the session to show from a /status/sessions response.
 function pickSession(data, cfg) {
   const list = (data && data.MediaContainer && data.MediaContainer.Metadata) || [];
   const filter = userFilterList(cfg.plexUser);
-  const types = cfg.mediaTypes || DEFAULT_CONFIG.mediaTypes;
+  const types = allowedTypes(cfg);
   const candidates = list.filter((m) =>
     matchesUser(m, filter) &&
     m.Player && STATE_RANK[m.Player.state] &&
@@ -717,7 +728,7 @@ function buildActivity(m, cfg = DEFAULT_CONFIG, now = Date.now()) {
   }
   const display = STATUS_DISPLAY[cfg.statusDisplay] != null ? STATUS_DISPLAY[cfg.statusDisplay] : 2;
   const activity = {
-    type: 3,                       // Watching
+    type: m.type === 'track' ? 2 : 3, // 2: Listening, 3: Watching
     status_display_type: display,  // 2: member list shows "Watching <details>"
     details: clip(details),
     assets: { large_image: cfg.largeImageKey || 'logo', large_text: clip(largeText) },
@@ -921,16 +932,26 @@ class DiscordIPC {
   }
 }
 
-// Sends an activity; drops status_display_type if this Discord build rejects it.
+// Sends an activity. If this Discord build rejects it, retries without
+// status_display_type, then as a plain "Playing" activity (type 0), and
+// remembers what worked.
 function makePusher(discord) {
   let statusDisplayTypeSupported = true;
+  const unsupportedTypes = new Set();
   return async function pushActivity(activity) {
     if (activity && !statusDisplayTypeSupported) delete activity.status_display_type;
+    if (activity && unsupportedTypes.has(activity.type)) activity.type = 0;
     let res = await discord.setActivity(activity);
     if (res.evt === 'ERROR' && activity && activity.status_display_type !== undefined) {
       log('Discord rejected status_display_type, retrying without it');
       statusDisplayTypeSupported = false;
       delete activity.status_display_type;
+      res = await discord.setActivity(activity);
+    }
+    if (res.evt === 'ERROR' && activity && activity.type !== 0) {
+      log(`Discord rejected activity type ${activity.type}, retrying as type 0 (Playing)`);
+      unsupportedTypes.add(activity.type);
+      activity.type = 0;
       res = await discord.setActivity(activity);
     }
     if (res.evt === 'ERROR') throw new Error(`SET_ACTIVITY rejected: ${res.data && res.data.message}`);
@@ -1036,6 +1057,13 @@ const TEST_SAMPLES = Object.freeze({
     Player: { state: 'playing', title: 'Living Room TV', product: 'Plex for Windows', platform: 'Windows' },
     User: { id: '1', title: 'you' },
   },
+  track: {
+    type: 'track', ratingKey: 'test', title: 'Example Song', grandparentTitle: 'Example Artist',
+    parentTitle: 'Example Album', parentYear: 2022, index: 4, librarySectionTitle: 'Music',
+    viewOffset: 75000, duration: 214000,
+    Player: { state: 'playing', title: 'iPhone', product: 'Plexamp', platform: 'iOS' },
+    User: { id: '1', title: 'you' },
+  },
   movie: {
     type: 'movie', ratingKey: 'test', title: 'Example Movie', year: 2023, contentRating: 'PG-13',
     audienceRating: 8.1, librarySectionTitle: 'Movies', viewOffset: 34 * 60000, duration: 112 * 60000,
@@ -1046,6 +1074,7 @@ const TEST_SAMPLES = Object.freeze({
 
 // Shows a sample activity for 20 seconds, then clears it.
 async function cmdTest(kind = 'episode') {
+  if (kind === 'music') kind = 'track';
   const sample = TEST_SAMPLES[kind];
   if (!sample) throw new Error(`Unknown sample "${kind}". Use: ${Object.keys(TEST_SAMPLES).join(', ')}`);
   const { config, errors, warnings } = loadConfig();
@@ -1411,6 +1440,7 @@ function parseArgs(argv) {
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    if (!positional.length && ['--version', '--help', '-h', '--test'].includes(a)) { positional.push(a); continue; }
     if (a.startsWith('--')) {
       const [k, v] = a.slice(2).split('=');
       if (v !== undefined) flags[k] = v;
@@ -1434,7 +1464,7 @@ Usage: node presence.js <command>
   install      Start automatically at login (Scheduled Task / LaunchAgent / systemd)
   uninstall    Remove the autostart  (--purge also deletes config and token)
   status       Show config, autostart and connection state
-  test [type]  Show a sample on Discord for 20 seconds (type: episode or movie)
+  test [type]  Show a sample on Discord for 20 seconds (type: episode, movie or music)
   help         Show this help
 
 Files: ${homeDir()}
@@ -1472,7 +1502,7 @@ module.exports = {
   parseEnvFile, migrateLegacyEnv, normalizeConfig, loadConfig, saveConfig, loadToken, saveToken,
   plexDirectAddress, parseServerUrl, userFilterList, pickSession, buildActivity, decideActivity, clip,
   PLACEHOLDERS, compileTemplate, renderTemplate, sessionFields, formatDuration, passesFilters, globToRegExp,
-  createPauseTracker, TEST_SAMPLES,
+  createPauseTracker, TEST_SAMPLES, makePusher, allowedTypes,
   ipcCandidates, encode, buildAuthUrl, pickConnection, listServers, parseArgs,
   renderLaunchAgent, renderSystemdUnit, renderWindowsInstallPs, paths,
 };
