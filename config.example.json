@@ -12,5 +12,21 @@
   "hideWhenPaused": false,
   "showPausedState": true,
   "mediaTypes": ["episode", "movie", "clip", "video"],
-  "plexClientIdentifier": ""
+  "plexClientIdentifier": "",
+  "templates": {
+    "episode": { "details": "{show|title}", "state": "[S{season}][ · E{episode}][ – {episodeTitle}]", "largeText": "" },
+    "movie": { "details": "{title}", "state": "{year|'Movie'}", "largeText": "" },
+    "other": { "details": "{title}", "state": "{show|library|'Video'}", "largeText": "" }
+  },
+  "pausedPrefix": "Paused – ",
+  "hideAfterPausedMinutes": 0,
+  "timestamps": "progress",
+  "showPlayPauseIcon": true,
+  "statusDisplay": "details",
+  "filters": {
+    "libraries": { "allow": [], "block": [] },
+    "titles": { "allow": [], "block": [] },
+    "players": { "allow": [], "block": [] },
+    "users": { "allow": [], "block": [] }
+  }
 }

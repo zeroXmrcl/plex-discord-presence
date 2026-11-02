@@ -150,9 +150,9 @@ test('server discovery prefers owned + local https, skips relays', () => {
 });
 
 test('CLI args', () => {
-  assert.deepEqual(p.parseArgs([]), { command: 'run', flags: {} });
-  assert.deepEqual(p.parseArgs(['setup', '--server', 'Home', '--relogin']), { command: 'setup', flags: { server: 'Home', relogin: true } });
-  assert.deepEqual(p.parseArgs(['uninstall', '--purge']), { command: 'uninstall', flags: { purge: true } });
+  assert.deepEqual(p.parseArgs([]), { command: 'run', flags: {}, args: [] });
+  assert.deepEqual(p.parseArgs(['setup', '--server', 'Home', '--relogin']), { command: 'setup', flags: { server: 'Home', relogin: true }, args: [] });
+  assert.deepEqual(p.parseArgs(['uninstall', '--purge']), { command: 'uninstall', flags: { purge: true }, args: [] });
 });
 
 test('service files quote paths with spaces', () => {

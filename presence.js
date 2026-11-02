@@ -32,7 +32,12 @@ const WINDOWS_TASK = 'Plex Discord Presence';             // Windows Scheduled T
 // The app is named "Plex" and has an art asset with the key "logo".
 const DEFAULT_CLIENT_ID = '1566630137603162182';
 
-const DEFAULT_CONFIG = Object.freeze({
+function deepFreeze(o) {
+  for (const v of Object.values(o)) if (v && typeof v === 'object') deepFreeze(v);
+  return Object.freeze(o);
+}
+
+const DEFAULT_CONFIG = deepFreeze({
   discordClientId: DEFAULT_CLIENT_ID,
   largeImageKey: 'logo',
   largeImageText: 'Plex',
@@ -47,7 +52,26 @@ const DEFAULT_CONFIG = Object.freeze({
   showPausedState: true,      // prefix "Paused – " while paused
   mediaTypes: ['episode', 'movie', 'clip', 'video'],
   plexClientIdentifier: '',   // generated on first setup, identifies this app to Plex
+  // Display options (added in 2.1.0). Only written to config.json when changed.
+  templates: {
+    episode: { details: '{show|title}', state: '[S{season}][ · E{episode}][ – {episodeTitle}]', largeText: '' },
+    movie: { details: '{title}', state: "{year|'Movie'}", largeText: '' },
+    other: { details: '{title}', state: "{show|library|'Video'}", largeText: '' },
+  },
+  pausedPrefix: 'Paused – ',
+  hideAfterPausedMinutes: 0,  // 0 = keep showing while paused
+  timestamps: 'progress',     // "progress" (bar), "elapsed" (time only) or "off"
+  showPlayPauseIcon: true,    // use smallImagePlayingKey / smallImagePausedKey if set
+  statusDisplay: 'details',   // member list text: "details", "state" or "name" (app name)
+  filters: {},                // { libraries|titles|players|users: { allow: [], block: [] } }
 });
+
+// Keys that setup always writes (the 2.0.0 config format).
+const CORE_KEYS = Object.freeze([
+  'discordClientId', 'largeImageKey', 'largeImageText', 'smallImagePlayingKey', 'smallImagePausedKey',
+  'pollIntervalSeconds', 'plexServerUrl', 'plexConnectAddress', 'plexTlsServername', 'plexUser',
+  'hideWhenPaused', 'showPausedState', 'mediaTypes', 'plexClientIdentifier',
+]);
 
 const RECONNECT_MS = 15000;
 const LOG_MAX_BYTES = 1024 * 1024;
@@ -112,10 +136,98 @@ function migrateLegacyEnv(env) {
   return { config, token: env.PLEX_TOKEN ? { serverToken: env.PLEX_TOKEN } : null };
 }
 
-// Merges user values over the defaults and validates types.
+const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+
+function checkStringList(value, name, errors) {
+  if (value == null) return [];
+  const list = Array.isArray(value) ? value : [value];
+  if (list.some((x) => (typeof x !== 'string' && typeof x !== 'number') || String(x).trim() === '')) {
+    errors.push(`${name} must be a text or a list of non-empty texts`);
+    return [];
+  }
+  return list.map((x) => String(x).trim());
+}
+
+function normalizeTemplates(raw, errors) {
+  const out = {};
+  if (raw != null && !isPlainObject(raw)) {
+    errors.push(`templates must be an object with the keys ${TEMPLATE_KINDS.join(', ')}`);
+    raw = {};
+  }
+  raw = raw || {};
+  for (const k of Object.keys(raw)) {
+    if (!TEMPLATE_KINDS.includes(k)) errors.push(`templates.${k}: unknown media type (use ${TEMPLATE_KINDS.join(', ')})`);
+  }
+  for (const kind of TEMPLATE_KINDS) {
+    const user = raw[kind];
+    if (user != null && !isPlainObject(user)) {
+      errors.push(`templates.${kind} must be an object with ${TEMPLATE_FIELDS.join(', ')}`);
+    }
+    const merged = { ...DEFAULT_CONFIG.templates[kind] };
+    for (const [field, value] of Object.entries(isPlainObject(user) ? user : {})) {
+      if (!TEMPLATE_FIELDS.includes(field)) {
+        errors.push(`templates.${kind}.${field}: unknown field (use ${TEMPLATE_FIELDS.join(', ')})`);
+        continue;
+      }
+      try {
+        compileTemplate(value);
+        merged[field] = value;
+      } catch (e) {
+        errors.push(`templates.${kind}.${field}: ${e.message}`);
+      }
+    }
+    out[kind] = merged;
+  }
+  return out;
+}
+
+function normalizeFilters(raw, errors) {
+  if (raw == null) return {};
+  if (!isPlainObject(raw)) {
+    errors.push(`filters must be an object with the keys ${FILTER_KEYS.join(', ')}`);
+    return {};
+  }
+  const out = {};
+  for (const [key, rule] of Object.entries(raw)) {
+    if (!FILTER_KEYS.includes(key)) {
+      errors.push(`filters.${key}: unknown filter (use ${FILTER_KEYS.join(', ')})`);
+      continue;
+    }
+    if (!isPlainObject(rule)) {
+      errors.push(`filters.${key} must look like { "allow": [...], "block": [...] }`);
+      continue;
+    }
+    const unknown = Object.keys(rule).filter((k) => k !== 'allow' && k !== 'block');
+    if (unknown.length) errors.push(`filters.${key}.${unknown[0]}: unknown key (use "allow" or "block")`);
+    out[key] = {
+      allow: checkStringList(rule.allow, `filters.${key}.allow`, errors),
+      block: checkStringList(rule.block, `filters.${key}.block`, errors),
+    };
+  }
+  return out;
+}
+
+function checkBoolean(cfg, key, errors) {
+  if (typeof cfg[key] !== 'boolean') {
+    errors.push(`${key} must be true or false`);
+    cfg[key] = DEFAULT_CONFIG[key];
+  }
+}
+
+// Merges user values over the defaults and validates them.
+// Returns { config, errors, warnings }; errors stop "run", warnings do not.
 function normalizeConfig(raw) {
-  const cfg = { ...DEFAULT_CONFIG, ...(raw || {}) };
   const errors = [];
+  const warnings = [];
+  if (raw != null && !isPlainObject(raw)) {
+    errors.push('config.json must contain a JSON object');
+    raw = {};
+  }
+  raw = raw || {};
+  for (const k of Object.keys(raw)) {
+    if (!Object.prototype.hasOwnProperty.call(DEFAULT_CONFIG, k)) warnings.push(`unknown option "${k}" is ignored (check the spelling)`);
+  }
+  const cfg = { ...DEFAULT_CONFIG, ...raw };
   cfg.discordClientId = String(cfg.discordClientId || DEFAULT_CLIENT_ID).trim();
   if (!/^\d{15,22}$/.test(cfg.discordClientId)) errors.push('discordClientId must be a numeric Discord application ID');
   cfg.pollIntervalSeconds = Number(cfg.pollIntervalSeconds);
@@ -125,11 +237,40 @@ function normalizeConfig(raw) {
   }
   cfg.hideWhenPaused = Boolean(cfg.hideWhenPaused);
   cfg.showPausedState = cfg.showPausedState !== false;
-  if (!Array.isArray(cfg.mediaTypes)) cfg.mediaTypes = [...DEFAULT_CONFIG.mediaTypes];
+  if (!Array.isArray(cfg.mediaTypes) || cfg.mediaTypes.some((t) => typeof t !== 'string')) {
+    errors.push('mediaTypes must be a list of Plex item types, e.g. ["episode", "movie"]');
+    cfg.mediaTypes = [...DEFAULT_CONFIG.mediaTypes];
+  }
   if (cfg.plexServerUrl) {
     try { parseServerUrl(cfg.plexServerUrl); } catch (e) { errors.push(e.message); }
   }
-  return { config: cfg, errors };
+  for (const k of ['largeImageKey', 'largeImageText', 'smallImagePlayingKey', 'smallImagePausedKey', 'pausedPrefix']) {
+    if (typeof cfg[k] !== 'string') {
+      errors.push(`${k} must be a text`);
+      cfg[k] = DEFAULT_CONFIG[k];
+    }
+  }
+  cfg.templates = normalizeTemplates(raw.templates, errors);
+  cfg.filters = normalizeFilters(raw.filters, errors);
+  cfg.hideAfterPausedMinutes = Number(cfg.hideAfterPausedMinutes);
+  if (!Number.isFinite(cfg.hideAfterPausedMinutes) || cfg.hideAfterPausedMinutes < 0) {
+    errors.push('hideAfterPausedMinutes must be a number >= 0 (0 keeps showing while paused)');
+    cfg.hideAfterPausedMinutes = 0;
+  }
+  cfg.timestamps = timestampMode(cfg.timestamps);
+  if (!TIMESTAMP_MODES.includes(cfg.timestamps)) {
+    errors.push(`timestamps must be one of ${TIMESTAMP_MODES.map((m) => `"${m}"`).join(', ')}`);
+    cfg.timestamps = DEFAULT_CONFIG.timestamps;
+  }
+  checkBoolean(cfg, 'showPlayPauseIcon', errors);
+  if (STATUS_DISPLAY[cfg.statusDisplay] == null) {
+    errors.push(`statusDisplay must be one of ${Object.keys(STATUS_DISPLAY).map((m) => `"${m}"`).join(', ')}`);
+    cfg.statusDisplay = DEFAULT_CONFIG.statusDisplay;
+  }
+  if (cfg.hideWhenPaused && cfg.hideAfterPausedMinutes > 0) {
+    warnings.push('hideWhenPaused is on, so hideAfterPausedMinutes has no effect');
+  }
+  return { config: cfg, errors, warnings };
 }
 
 function readJson(file) {
@@ -149,7 +290,11 @@ function loadConfig() {
 function saveConfig(cfg) {
   ensureDir(paths.dir);
   const out = {};
-  for (const k of Object.keys(DEFAULT_CONFIG)) out[k] = cfg[k];
+  for (const k of Object.keys(DEFAULT_CONFIG)) {
+    // Display options are only written when they differ from the defaults,
+    // so new defaults in later versions still apply.
+    if (CORE_KEYS.includes(k) || JSON.stringify(cfg[k]) !== JSON.stringify(DEFAULT_CONFIG[k])) out[k] = cfg[k];
+  }
   fs.writeFileSync(paths.config, JSON.stringify(out, null, 2) + '\n', { mode: 0o600 });
 }
 
@@ -266,6 +411,251 @@ async function plexServerGet(cfg, token, p) {
   return res.json;
 }
 
+// ---------- display: templates and filters (pure functions) ----------
+// Placeholders available in templates. Values that do not apply to a media
+// type (for example {artist} for a movie) are empty.
+const PLACEHOLDERS = Object.freeze({
+  title: 'Title of the item (episode title for episodes, track title for music)',
+  year: 'Release year (album year for music)',
+  show: 'Show name (episodes and clips)',
+  season: 'Season number',
+  episode: 'Episode number',
+  seasonPadded: 'Season number with two digits, e.g. 01',
+  episodePadded: 'Episode number with two digits, e.g. 07',
+  episodeTitle: 'Episode title (episodes only)',
+  artist: 'Track artist (music)',
+  albumArtist: 'Album artist (music)',
+  album: 'Album title (music)',
+  track: 'Track number (music)',
+  rating: 'Content rating, e.g. PG-13 or TV-MA',
+  score: 'Audience or critic score, e.g. 8.1',
+  edition: 'Edition, e.g. Director\'s Cut',
+  library: 'Name of the Plex library',
+  player: 'Name of the playing device (falls back to the app name)',
+  product: 'Plex app, e.g. Plex for Windows or Plexamp',
+  platform: 'Platform of the player, e.g. Windows or iOS',
+  user: 'Plex user who is playing',
+  state: 'Playing, Paused or Buffering',
+  duration: 'Total length, e.g. 45:00 or 1:52:10',
+  type: 'Media type: Episode, Movie, Track or Video',
+});
+
+const TEMPLATE_KINDS = ['episode', 'movie', 'other'];
+const TEMPLATE_FIELDS = ['details', 'state', 'largeText'];
+const FILTER_KEYS = ['libraries', 'titles', 'players', 'users'];
+const TIMESTAMP_MODES = ['progress', 'elapsed', 'off'];
+const STATUS_DISPLAY = { name: 0, state: 1, details: 2 };
+
+function str(v) {
+  return v == null ? '' : String(v).trim();
+}
+
+function formatDuration(ms) {
+  const total = Math.round(Number(ms) / 1000);
+  if (!Number.isFinite(total) || total <= 0) return '';
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
+function templateKind(m) {
+  return TEMPLATE_KINDS.includes(m.type) && m.type !== 'other' ? m.type : 'other';
+}
+
+// Flattens a Plex session into the values that templates can use.
+function sessionFields(m) {
+  const isEpisode = m.type === 'episode';
+  const isTrack = m.type === 'track';
+  const player = m.Player || {};
+  const user = m.User || {};
+  const pad = (v) => (str(v) === '' ? '' : str(v).padStart(2, '0'));
+  const score = m.audienceRating != null ? m.audienceRating : m.rating;
+  const state = player.state === 'paused' ? 'Paused' : player.state === 'buffering' ? 'Buffering' : 'Playing';
+  const type = { episode: 'Episode', movie: 'Movie', track: 'Track' }[m.type] || 'Video';
+  return {
+    title: str(m.title),
+    year: str(m.year || m.parentYear),
+    show: isTrack ? '' : str(m.grandparentTitle),
+    season: isEpisode ? str(m.parentIndex) : '',
+    episode: isEpisode ? str(m.index) : '',
+    seasonPadded: isEpisode ? pad(m.parentIndex) : '',
+    episodePadded: isEpisode ? pad(m.index) : '',
+    episodeTitle: isEpisode ? str(m.title) : '',
+    artist: isTrack ? str(m.originalTitle || m.grandparentTitle) : '',
+    albumArtist: isTrack ? str(m.grandparentTitle) : '',
+    album: isTrack ? str(m.parentTitle) : '',
+    track: isTrack ? str(m.index) : '',
+    rating: str(m.contentRating),
+    score: score != null && Number.isFinite(Number(score)) ? String(Math.round(Number(score) * 10) / 10) : '',
+    edition: str(m.editionTitle),
+    library: str(m.librarySectionTitle),
+    player: str(player.title || player.product),
+    product: str(player.product),
+    platform: str(player.platform),
+    user: str(user.title || user.username),
+    state,
+    duration: formatDuration(m.duration),
+    type,
+  };
+}
+
+// Template syntax:
+//   {name}            value of a placeholder
+//   {a|b|'text'}      first non-empty value; 'text' in single quotes is literal
+//   [ ... ]           optional part, left out if any placeholder in it is empty
+//   {{ }} [[ ]]       literal braces / brackets
+// Separators such as " · " or " – " left at the start or end are removed.
+function compileTemplate(src) {
+  if (typeof src !== 'string') throw new Error('must be a string');
+  const root = [];
+  let cur = root;
+  let group = null;
+  let text = '';
+  const flush = () => { if (text) { cur.push({ text }); text = ''; } };
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const next = src[i + 1];
+    if ((c === '{' || c === '}' || c === '[' || c === ']') && next === c) { text += c; i++; continue; }
+    if (c === '{') {
+      const end = src.indexOf('}', i);
+      if (end < 0) throw new Error(`"{" at position ${i + 1} is never closed`);
+      const body = src.slice(i + 1, end);
+      const alts = body.split('|').map((a) => a.trim());
+      if (alts.some((a) => a === '')) throw new Error(`empty placeholder "{${body}}"`);
+      const parsed = alts.map((a) => {
+        const lit = /^'(.*)'$/.exec(a);
+        if (lit) return { literal: lit[1] };
+        if (!Object.prototype.hasOwnProperty.call(PLACEHOLDERS, a)) {
+          throw new Error(`unknown placeholder "{${a}}" (known: ${Object.keys(PLACEHOLDERS).join(', ')})`);
+        }
+        return { name: a };
+      });
+      flush();
+      cur.push({ alts: parsed });
+      i = end;
+      continue;
+    }
+    if (c === '}') throw new Error(`"}" at position ${i + 1} has no matching "{" (use "}}" for a literal brace)`);
+    if (c === '[') {
+      if (group) throw new Error(`optional parts "[...]" cannot be nested (position ${i + 1})`);
+      flush();
+      group = { group: [] };
+      cur.push(group);
+      cur = group.group;
+      continue;
+    }
+    if (c === ']') {
+      if (!group) throw new Error(`"]" at position ${i + 1} has no matching "[" (use "]]" for a literal bracket)`);
+      flush();
+      group = null;
+      cur = root;
+      continue;
+    }
+    text += c;
+  }
+  if (group) throw new Error('"[" is never closed');
+  flush();
+  return root;
+}
+
+const templateCache = new Map();
+function getCompiled(src) {
+  let t = templateCache.get(src);
+  if (!t) {
+    t = compileTemplate(src);
+    if (templateCache.size > 200) templateCache.clear();
+    templateCache.set(src, t);
+  }
+  return t;
+}
+
+const EDGE_SEPARATORS_START = /^(?:\s*[·•–—|,:/-](?=\s))+\s*/;
+const EDGE_SEPARATORS_END = /(?:\s[·•–—|,:/-])+\s*$/;
+
+function renderTemplate(src, fields) {
+  const renderNodes = (nodes) => {
+    let out = '';
+    let complete = true;
+    for (const n of nodes) {
+      if (n.text != null) out += n.text;
+      else if (n.alts) {
+        let v = '';
+        for (const a of n.alts) {
+          v = a.literal != null ? a.literal : str(fields[a.name]);
+          if (v !== '') break;
+        }
+        if (v === '') complete = false;
+        out += v;
+      } else if (n.group) {
+        const r = renderNodes(n.group);
+        if (r.complete) out += r.out;
+      }
+    }
+    return { out, complete };
+  };
+  return renderNodes(getCompiled(src)).out
+    .replace(/\s+/g, ' ')
+    .replace(EDGE_SEPARATORS_START, '')
+    .replace(EDGE_SEPARATORS_END, '')
+    .trim();
+}
+
+function templatesFor(m, cfg) {
+  const kind = templateKind(m);
+  const user = (cfg.templates && cfg.templates[kind]) || {};
+  return { ...DEFAULT_CONFIG.templates[kind], ...user };
+}
+
+// "*" matches any text; matching ignores case.
+function globToRegExp(pattern) {
+  const esc = String(pattern).trim().split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(`^${esc.join('.*')}$`, 'i');
+}
+
+function filterValues(m, key) {
+  const player = m.Player || {};
+  const user = m.User || {};
+  const v = {
+    libraries: [m.librarySectionTitle, m.librarySectionID],
+    titles: [m.title, m.grandparentTitle, m.parentTitle, m.originalTitle],
+    players: [player.title, player.product, player.device, player.platform],
+    users: [user.id, user.title, user.username],
+  }[key];
+  return v.filter((x) => x != null && x !== '').map(String);
+}
+
+const filterCache = new WeakMap();
+function compiledFilters(filters) {
+  if (!filters || typeof filters !== 'object') return [];
+  let c = filterCache.get(filters);
+  if (!c) {
+    c = FILTER_KEYS.filter((k) => filters[k]).map((k) => ({
+      key: k,
+      allow: toList(filters[k].allow).map(globToRegExp),
+      block: toList(filters[k].block).map(globToRegExp),
+    }));
+    filterCache.set(filters, c);
+  }
+  return c;
+}
+
+function toList(v) {
+  if (v == null || v === '') return [];
+  return (Array.isArray(v) ? v : [v]).map((x) => String(x).trim()).filter(Boolean);
+}
+
+// True if the session passes all allow and block lists.
+function passesFilters(m, filters) {
+  for (const f of compiledFilters(filters)) {
+    const values = filterValues(m, f.key);
+    const hit = (list) => list.some((re) => values.some((v) => re.test(v)));
+    if (f.allow.length && !hit(f.allow)) return false;
+    if (f.block.length && hit(f.block)) return false;
+  }
+  return true;
+}
+
 // ---------- sessions and activity (pure functions) ----------
 const STATE_RANK = { playing: 3, buffering: 2, paused: 1 };
 
@@ -290,7 +680,8 @@ function pickSession(data, cfg) {
   const candidates = list.filter((m) =>
     matchesUser(m, filter) &&
     m.Player && STATE_RANK[m.Player.state] &&
-    types.includes(m.type));
+    types.includes(m.type) &&
+    passesFilters(m, cfg.filters));
   if (!candidates.length) return null;
   // Prefer playing over buffering over paused, then the furthest progress.
   candidates.sort((a, b) =>
@@ -305,53 +696,77 @@ function clip(s, max = 128) {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
+function timestampMode(v) {
+  if (v === false) return 'off';
+  if (v === true || v == null) return 'progress';
+  return v;
+}
+
 function buildActivity(m, cfg = DEFAULT_CONFIG, now = Date.now()) {
-  let details;
-  let state;
-  if (m.type === 'episode') {
-    details = m.grandparentTitle || m.title;
-    const s = m.parentIndex != null ? `S${m.parentIndex}` : '';
-    const e = m.index != null ? `E${m.index}` : '';
-    state = [[s, e].filter(Boolean).join(' · '), m.title].filter(Boolean).join(' – ');
-  } else if (m.type === 'movie') {
-    details = m.title;
-    state = m.year ? String(m.year) : 'Movie';
-  } else {
-    details = m.title;
-    state = m.grandparentTitle || m.librarySectionTitle || 'Video';
-  }
+  const fields = sessionFields(m);
+  const t = templatesFor(m, cfg);
+  const details = renderTemplate(t.details, fields) || fields.title || fields.type;
+  const state = renderTemplate(t.state, fields);
+  const largeText = renderTemplate(t.largeText || '', fields) || cfg.largeImageText || 'Plex';
 
   const paused = m.Player && m.Player.state === 'paused';
+  const prefix = cfg.pausedPrefix != null ? String(cfg.pausedPrefix) : DEFAULT_CONFIG.pausedPrefix;
+  let shownState = state;
+  if (paused && cfg.showPausedState !== false) {
+    shownState = state ? `${prefix}${state}` : prefix.replace(EDGE_SEPARATORS_END, '').trim();
+  }
+  const display = STATUS_DISPLAY[cfg.statusDisplay] != null ? STATUS_DISPLAY[cfg.statusDisplay] : 2;
   const activity = {
-    type: 3,                // Watching
-    status_display_type: 2, // member list shows "Watching <details>"
+    type: 3,                       // Watching
+    status_display_type: display,  // 2: member list shows "Watching <details>"
     details: clip(details),
-    state: clip(paused && cfg.showPausedState !== false ? `Paused – ${state}` : state),
-    assets: { large_image: cfg.largeImageKey || 'logo', large_text: clip(cfg.largeImageText || 'Plex') },
+    assets: { large_image: cfg.largeImageKey || 'logo', large_text: clip(largeText) },
     instance: false,
   };
+  if (shownState.trim()) activity.state = clip(shownState);
   const small = paused ? cfg.smallImagePausedKey : cfg.smallImagePlayingKey;
-  if (small) {
+  if (small && cfg.showPlayPauseIcon !== false) {
     activity.assets.small_image = small;
     activity.assets.small_text = paused ? 'Paused' : 'Playing';
   }
-  if (!paused) {
+  const mode = timestampMode(cfg.timestamps);
+  if (!paused && mode !== 'off') {
     const start = now - (Number(m.viewOffset) || 0);
     activity.timestamps = { start };
-    if (m.duration) activity.timestamps.end = start + Number(m.duration);
+    if (mode === 'progress' && m.duration) activity.timestamps.end = start + Number(m.duration);
   }
   return activity;
 }
 
+function sessionId(m) {
+  return `${m.sessionKey || (m.Session && m.Session.id) || ''}|${m.ratingKey || ''}`;
+}
+
+// Remembers since when the shown session has been paused (Plex does not say).
+function createPauseTracker() {
+  let current = null; // { id, since }
+  return {
+    pausedFor(session, now = Date.now()) {
+      if (!session || !session.Player || session.Player.state !== 'paused') { current = null; return 0; }
+      const id = sessionId(session);
+      if (!current || current.id !== id) current = { id, since: now };
+      return now - current.since;
+    },
+  };
+}
+
 // Decides what to show: null clears the activity.
-function decideActivity(session, cfg, now = Date.now()) {
+function decideActivity(session, cfg, now = Date.now(), pausedMs = 0) {
   if (!session) return { key: 'none', activity: null };
   const paused = session.Player.state === 'paused';
   if (paused && cfg.hideWhenPaused) return { key: 'none', activity: null };
+  const limit = Number(cfg.hideAfterPausedMinutes) || 0;
+  if (paused && limit > 0 && pausedMs >= limit * 60000) return { key: 'none', activity: null };
   const activity = buildActivity(session, cfg, now);
-  // Re-send when content or state changes, or when the position jumped (seek).
+  // Re-send when content, text or state changes, or when the position jumped (seek).
   const bucket = activity.timestamps ? Math.round(activity.timestamps.start / 15000) : 'p';
-  return { key: `${session.ratingKey}|${session.Player.state}|${bucket}`, activity };
+  const { timestamps, ...rest } = activity;
+  return { key: `${session.ratingKey}|${session.Player.state}|${bucket}|${JSON.stringify(rest)}`, activity };
 }
 
 // ---------- Discord IPC ----------
@@ -524,9 +939,14 @@ function makePusher(discord) {
 }
 
 // ---------- run ----------
+function configError(errors) {
+  return new Error(`Invalid config (${paths.config}):\n  - ${errors.join('\n  - ')}`);
+}
+
 function requireReady() {
-  const { config, errors } = loadConfig();
-  if (errors.length) throw new Error(`Invalid config (${paths.config}):\n  - ${errors.join('\n  - ')}`);
+  const { config, errors, warnings } = loadConfig();
+  if (errors.length) throw configError(errors);
+  for (const w of warnings) log(`Config warning: ${w}`);
   const token = loadToken();
   if (!config.plexServerUrl || !token || !token.serverToken) {
     throw new Error('Not set up yet. Run: node presence.js setup');
@@ -540,6 +960,7 @@ async function cmdRun() {
   const discord = new DiscordIPC(config.discordClientId);
   const pushActivity = makePusher(discord);
   const pollMs = config.pollIntervalSeconds * 1000;
+  const pauses = createPauseTracker();
   let lastKey = null;
   let stopping = false;
   let timer = null;
@@ -573,7 +994,8 @@ async function cmdRun() {
         log('Plex poll failed:', e.message);
         return; // keep the current activity until Plex answers again
       }
-      const { key, activity } = decideActivity(session, config);
+      const now = Date.now();
+      const { key, activity } = decideActivity(session, config, now, pauses.pausedFor(session, now));
       if (key === lastKey) return;
       await pushActivity(activity);
       log(activity ? `Activity set: ${activity.details} / ${activity.state}` : 'Nothing to show, activity cleared');
@@ -605,20 +1027,38 @@ async function cmdRun() {
   loop();
 }
 
-// Shows a sample episode activity for 20 seconds, then clears it.
-async function cmdTest() {
-  const { config } = loadConfig();
+// Placeholder sessions for "test": nothing here comes from your server.
+const TEST_SAMPLES = Object.freeze({
+  episode: {
+    type: 'episode', ratingKey: 'test', grandparentTitle: 'Example Show', parentIndex: 1, index: 3,
+    title: 'The Test Episode', year: 2024, contentRating: 'TV-14', librarySectionTitle: 'TV Shows',
+    viewOffset: 12 * 60000, duration: 45 * 60000,
+    Player: { state: 'playing', title: 'Living Room TV', product: 'Plex for Windows', platform: 'Windows' },
+    User: { id: '1', title: 'you' },
+  },
+  movie: {
+    type: 'movie', ratingKey: 'test', title: 'Example Movie', year: 2023, contentRating: 'PG-13',
+    audienceRating: 8.1, librarySectionTitle: 'Movies', viewOffset: 34 * 60000, duration: 112 * 60000,
+    Player: { state: 'playing', title: 'Living Room TV', product: 'Plex for Windows', platform: 'Windows' },
+    User: { id: '1', title: 'you' },
+  },
+});
+
+// Shows a sample activity for 20 seconds, then clears it.
+async function cmdTest(kind = 'episode') {
+  const sample = TEST_SAMPLES[kind];
+  if (!sample) throw new Error(`Unknown sample "${kind}". Use: ${Object.keys(TEST_SAMPLES).join(', ')}`);
+  const { config, errors, warnings } = loadConfig();
+  if (errors.length) throw configError(errors);
+  for (const w of warnings) console.log(`Config warning: ${w}`);
+  const activity = buildActivity(sample, config);
+  console.log(`Line 1: ${activity.details}`);
+  console.log(`Line 2: ${activity.state || '(empty)'}`);
   const discord = new DiscordIPC(config.discordClientId);
   await discord.connect();
-  // Placeholder session: looks like watching an episode, 12 of 45 minutes in.
-  const sample = {
-    type: 'episode', grandparentTitle: 'Example Show', parentIndex: 1, index: 3,
-    title: 'The Test Episode', viewOffset: 12 * 60000, duration: 45 * 60000,
-    Player: { state: 'playing' },
-  };
-  const res = await makePusher(discord)(buildActivity(sample, config));
+  const res = await makePusher(discord)(activity);
   log('Test activity accepted by Discord:', res.evt === 'ERROR' ? 'no' : 'yes');
-  console.log('Showing a sample episode on your Discord profile for 20 seconds...');
+  console.log(`Showing a sample ${kind} on your Discord profile for 20 seconds...`);
   await new Promise((r) => setTimeout(r, 20000));
   await discord.setActivity(null);
   log('Test activity cleared');
@@ -940,11 +1380,12 @@ function serviceStatus() {
 }
 
 async function cmdStatus() {
-  const { config, errors } = loadConfig();
+  const { config, errors, warnings } = loadConfig();
   const token = loadToken();
   console.log(`${PRODUCT} ${VERSION}`);
   console.log(`Config:          ${fs.existsSync(paths.config) ? paths.config : '(none, run setup)'}`);
-  if (errors.length) console.log(`Config errors:   ${errors.join('; ')}`);
+  for (const e of errors) console.log(`Config error:    ${e}`);
+  for (const w of warnings) console.log(`Config warning:  ${w}`);
   console.log(`Signed in:       ${token && token.serverToken ? 'yes' : 'no'}`);
   console.log(`Plex server:     ${config.plexServerUrl || '(not set)'}`);
   console.log(`User filter:     ${JSON.stringify(config.plexUser)}`);
@@ -956,7 +1397,8 @@ async function cmdStatus() {
     try {
       const data = await plexServerGet(config, token.serverToken, '/status/sessions');
       const s = pickSession(data, config);
-      console.log(`Plex:            reachable${s ? `, now: ${buildActivity(s, config).details}` : ', nothing playing for this user'}`);
+      const a = s && buildActivity(s, config);
+      console.log(`Plex:            reachable${a ? `, now: ${a.details}${a.state ? ` / ${a.state}` : ''}` : ', nothing shown (nothing playing or filtered out)'}`);
     } catch (e) {
       console.log(`Plex:            not reachable (${e.message})`);
     }
@@ -976,7 +1418,7 @@ function parseArgs(argv) {
       else flags[k] = true;
     } else positional.push(a);
   }
-  return { command: positional[0] || 'run', flags };
+  return { command: positional[0] || 'run', flags, args: positional.slice(1) };
 }
 
 const HELP = `${PRODUCT} ${VERSION}
@@ -992,21 +1434,21 @@ Usage: node presence.js <command>
   install      Start automatically at login (Scheduled Task / LaunchAgent / systemd)
   uninstall    Remove the autostart  (--purge also deletes config and token)
   status       Show config, autostart and connection state
-  test         Show a sample episode on Discord for 20 seconds
+  test [type]  Show a sample on Discord for 20 seconds (type: episode or movie)
   help         Show this help
 
 Files: ${homeDir()}
 `;
 
 async function main(argv) {
-  const { command, flags } = parseArgs(argv);
+  const { command, flags, args } = parseArgs(argv);
   switch (command) {
     case 'run': return cmdRun();
     case 'setup': return cmdSetup(flags);
     case 'install': return cmdInstall();
     case 'uninstall': return cmdUninstall(flags);
     case 'status': return cmdStatus();
-    case 'test': return cmdTest();
+    case 'test': return cmdTest(args[0]);
     case 'help': case '-h': case '--help': console.log(HELP); return undefined;
     case '--version': case 'version': console.log(VERSION); return undefined;
     default:
@@ -1029,6 +1471,8 @@ module.exports = {
   DEFAULT_CONFIG, DEFAULT_CLIENT_ID,
   parseEnvFile, migrateLegacyEnv, normalizeConfig, loadConfig, saveConfig, loadToken, saveToken,
   plexDirectAddress, parseServerUrl, userFilterList, pickSession, buildActivity, decideActivity, clip,
+  PLACEHOLDERS, compileTemplate, renderTemplate, sessionFields, formatDuration, passesFilters, globToRegExp,
+  createPauseTracker, TEST_SAMPLES,
   ipcCandidates, encode, buildAuthUrl, pickConnection, listServers, parseArgs,
   renderLaunchAgent, renderSystemdUnit, renderWindowsInstallPs, paths,
 };
