@@ -1,0 +1,34 @@
+/* System fonts only, no external requests. */
+:root { --bg:#0f1015; --fg:#f2f3f5; --muted:#b5bac1; --card:#1e1f26; --accent:#e5a00d; --line:#3a3c45; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { min-height: 100%; max-width: 760px; margin: 0 auto; padding: 24px 20px; display: flex; flex-direction: column; justify-content: center; gap: 36px; }
+a { color: var(--accent); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.skip { position: absolute; left: 8px; top: -60px; background: var(--accent); color: #000; padding: 10px 14px; border-radius: 6px; }
+.skip:focus { top: 8px; }
+.intro { text-align: center; }
+h1 { margin: 0 0 8px; font-size: clamp(1.6rem, 4vw, 2.6rem); }
+.lead { margin: 0 auto; max-width: 40em; color: var(--muted); }
+.install { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+h2 { margin: 0 0 12px; font-size: 1.1rem; }
+.tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+button { font: inherit; min-height: 44px; min-width: 44px; padding: 0 16px; border-radius: 8px; cursor: pointer; }
+[role=tab] { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+[role=tab][aria-selected=true] { background: var(--fg); color: #000; border-color: var(--fg); }
+.panel { display: flex; gap: 10px; align-items: center; background: #000; border-radius: 10px; padding: 8px 8px 8px 16px; }
+.panel[hidden] { display: none; }
+code { flex: 1; font: 0.95rem/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-x: auto; white-space: nowrap; padding: 6px 0; }
+.copy { background: var(--accent); color: #000; border: 0; font-weight: 600; }
+.status { min-height: 1.4em; margin: 6px 0 0; font-size: .9rem; color: var(--muted); }
+.note { margin: 4px 0 0; font-size: .9rem; color: var(--muted); }
+footer { text-align: center; font-size: .85rem; color: var(--muted); }
+footer a { display: inline-block; padding: 12px 4px; }
+@media (max-width: 600px) {
+  main { gap: 16px; padding: 16px 14px; }
+  .lead, .note { font-size: .88rem; }
+  .panel { flex-direction: column; align-items: stretch; padding: 12px; }
+  code { white-space: normal; overflow-wrap: anywhere; font-size: .85rem; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }

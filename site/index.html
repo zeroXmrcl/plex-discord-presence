@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plex Discord Presence: install in one line</title>
+<meta name="description" content="Show what you watch and listen to on Plex as Discord Rich Presence. Zero dependencies, LAN-only, one-line install.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#install">Skip to install command</a>
+<main>
+  <header class="intro">
+    <h1>Plex Discord Presence</h1>
+    <p class="lead">Show what you watch and listen to on Plex as Discord Rich Presence. One file, no npm packages, LAN-only, no tracking.</p>
+  </header>
+
+  <section id="install" class="install" aria-labelledby="install-title">
+    <h2 id="install-title">Install</h2>
+    <div class="tabs" role="tablist" aria-label="Operating system">
+      <button role="tab" id="tab-unix" aria-controls="panel-unix" aria-selected="true">macOS / Linux</button>
+      <button role="tab" id="tab-win" aria-controls="panel-win" aria-selected="false" tabindex="-1">Windows</button>
+    </div>
+    <div role="tabpanel" id="panel-unix" aria-labelledby="tab-unix" class="panel">
+      <code id="cmd-unix">curl -fsSL https://INSTALLER_HOST/install.sh | sh</code>
+      <button class="copy" data-target="cmd-unix">Copy</button>
+    </div>
+    <div role="tabpanel" id="panel-win" aria-labelledby="tab-win" class="panel" hidden>
+      <code id="cmd-win">irm https://INSTALLER_HOST/install.ps1 | iex</code>
+      <button class="copy" data-target="cmd-win">Copy</button>
+    </div>
+    <p class="status" role="status" aria-live="polite"></p>
+    <p class="note">Brings its own Node.js if you have none (official nodejs.org build, SHA-256 checked). No sudo or admin rights. Needs the Discord desktop app and a Plex server on your network.
+      <a href="https://github.com/zeroXmrcl/plex-discord-presence/tree/main/site">Read the installer</a> first if you like.</p>
+  </section>
+
+
+  <footer><a href="https://github.com/zeroXmrcl/plex-discord-presence">GitHub</a> · MIT license · by zeroXmrcl</footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
